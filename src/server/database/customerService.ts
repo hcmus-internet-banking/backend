@@ -14,21 +14,20 @@ export type DefaultCustomerSelector = Prisma.CustomerGetPayload<{
   select: typeof defaultCustomerSelector;
 }>;
 
-export interface CustomerWithToken extends DefaultCustomerSelector {
-  tokens: {
-    accessToken: string;
-    refreshToken: string;
-  };
-}
-
 export class CustomerService {
-  static createCustomer = async (
-    customer: Prisma.CustomerCreateInput
-  ): Promise<DefaultCustomerSelector | null> => {
+  static createCustomer = async (customer: Prisma.CustomerCreateInput) => {
     try {
+      const isDev = process.env.NODE_ENV === "development";
+
       const newCustomer = await prisma.customer.create({
-        data: customer,
-        select: defaultCustomerSelector,
+        data: {
+          ...customer,
+          balance: isDev && 11e9,
+        },
+        select: {
+          ...defaultCustomerSelector,
+          email: true,
+        },
       });
 
       return newCustomer;
@@ -39,10 +38,7 @@ export class CustomerService {
     }
   };
 
-  static authenticateCustomer = async (
-    email: string,
-    password: string
-  ): Promise<CustomerWithToken | null> => {
+  static authenticateCustomer = async (email: string, password: string) => {
     try {
       const hashedPassword = (
         await prisma.customer.findFirstOrThrow({
@@ -92,4 +88,59 @@ export class CustomerService {
       throw new Error(error);
     }
   };
+
+  static transferToAnotherAccount = async ({
+    amount,
+    from,
+    to,
+  }: {
+    from: string;
+    to: string;
+    amount: bigint;
+  }) => {
+    const session = await prisma.$transaction([
+      prisma.customer.update({
+        where: { id: from },
+        data: {
+          balance: {
+            decrement: amount,
+          },
+        },
+        select: {
+          ...defaultCustomerSelector,
+          balance: true,
+        },
+      }),
+      prisma.customer.update({
+        where: { id: to },
+        data: {
+          balance: {
+            increment: amount,
+          },
+        },
+        select: {
+          ...defaultCustomerSelector,
+        },
+      }),
+    ]);
+
+    return {
+      from: session[0],
+      to: session[1],
+    };
+  };
+
+  static getCustomerIdByBankNumber = async (to: string) => {
+    return (
+      await prisma.customer.findUnique({
+        where: { accountNumber: to },
+        select: { id: true },
+      })
+    )?.id;
+  };
 }
+
+//@ts-ignore
+BigInt.prototype.toJSON = function () {
+  return this.toString();
+};
